@@ -1,0 +1,68 @@
+name: Publish
+
+on:
+  release:
+    types:
+      - published
+  workflow_dispatch:
+
+concurrency:
+  group: marketplace-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to VS Code Marketplace
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify release tag matches package version
+        if: github.event_name == 'release'
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::GitHub release tag ${GITHUB_REF_NAME} does not match package.json version v${version}"
+            exit 1
+          fi
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: Package VSIX
+        run: npx --yes @vscode/vsce@4.1.1 package --githubBranch main
+
+      - name: Upload VSIX
+        uses: actions/upload-artifact@v4
+        with:
+          name: remove-console-log-vsix-${{ github.run_number }}
+          path: "*.vsix"
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish with Trusted Publishing
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          npx --yes @vscode/vsce@4.1.1 publish --oidc --packagePath "remove-console-log-${version}.vsix"
